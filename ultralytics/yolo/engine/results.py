@@ -90,15 +90,23 @@ class Results(SimpleClass):
         _keys (tuple): A tuple of attribute names for non-empty attributes.
     """
 
-    def __init__(self, orig_img, path, names, boxes=None, masks=None, probs=None, keypoints=None) -> None:
+    def __init__(self, orig_img, path, names, boxes=None, masks=None, probs=None, keypoints=None, feature_map_boxes=None) -> None:
         """Initialize the Results class."""
+        print("""Initialize the Results class.""")
         self.orig_img = orig_img
         self.orig_shape = orig_img.shape[:2]
-        self.boxes = Boxes(boxes, self.orig_shape) if boxes is not None else None  # native size boxes
-        self.masks = Masks(masks, self.orig_shape) if masks is not None else None  # native size or imgsz masks
+        # native size boxes
+        self.boxes = Boxes(
+            boxes, self.orig_shape) if boxes is not None else None
+        self.feature_map_boxes = feature_map_boxes
+        # native size or imgsz masks
+        self.masks = Masks(
+            masks, self.orig_shape) if masks is not None else None
         self.probs = Probs(probs) if probs is not None else None
-        self.keypoints = Keypoints(keypoints, self.orig_shape) if keypoints is not None else None
-        self.speed = {'preprocess': None, 'inference': None, 'postprocess': None}  # milliseconds per image
+        self.keypoints = Keypoints(
+            keypoints, self.orig_shape) if keypoints is not None else None
+        self.speed = {'preprocess': None, 'inference': None,
+                      'postprocess': None}  # milliseconds per image
         self.names = names
         self.path = path
         self.save_dir = None
@@ -170,7 +178,7 @@ class Results(SimpleClass):
             font='Arial.ttf',
             pil=False,
             img=None,
-            im_gpu=None,
+            img_gpu=None,
             kpt_line=True,
             labels=True,
             boxes=True,
@@ -188,7 +196,7 @@ class Results(SimpleClass):
             font (str): The font to use for the text.
             pil (bool): Whether to return the image as a PIL Image.
             img (numpy.ndarray): Plot to another image. if not, plot to original image.
-            im_gpu (torch.Tensor): Normalized image in gpu with shape (1, 3, 640, 640), for faster mask plotting.
+            img_gpu (torch.Tensor): Normalized image in gpu with shape (1, 3, 640, 640), for faster mask plotting.
             kpt_line (bool): Whether to draw lines connecting keypoints.
             labels (bool): Whether to plot the label of bounding boxes.
             boxes (bool): Whether to plot the bounding boxes.
@@ -199,57 +207,60 @@ class Results(SimpleClass):
             (numpy.ndarray): A numpy array of the annotated image.
         """
         if img is None and isinstance(self.orig_img, torch.Tensor):
-            img = np.ascontiguousarray(self.orig_img[0].permute(1, 2, 0).cpu().detach().numpy()) * 255
+            LOGGER.warning(
+                'WARNING ⚠️ Results plotting is not supported for torch.Tensor image types.')
+            return
 
         # Deprecation warn TODO: remove in 8.2
         if 'show_conf' in kwargs:
             deprecation_warn('show_conf', 'conf')
             conf = kwargs['show_conf']
-            assert type(conf) == bool, '`show_conf` should be of boolean type, i.e, show_conf=True/False'
+            assert type(
+                conf) == bool, '`show_conf` should be of boolean type, i.e, show_conf=True/False'
 
         if 'line_thickness' in kwargs:
             deprecation_warn('line_thickness', 'line_width')
             line_width = kwargs['line_thickness']
-            assert type(line_width) == int, '`line_width` should be of int type, i.e, line_width=3'
+            assert type(
+                line_width) == int, '`line_width` should be of int type, i.e, line_width=3'
 
         names = self.names
+        annotator = Annotator(deepcopy(self.orig_img if img is None else img),
+                              line_width,
+                              font_size,
+                              font,
+                              pil,
+                              example=names)
         pred_boxes, show_boxes = self.boxes, boxes
         pred_masks, show_masks = self.masks, masks
         pred_probs, show_probs = self.probs, probs
-        annotator = Annotator(
-            deepcopy(self.orig_img if img is None else img),
-            line_width,
-            font_size,
-            font,
-            pil or (pred_probs is not None and show_probs),  # Classify tasks default to pil=True
-            example=names)
-
-        # Plot Segment results
+        keypoints = self.keypoints
         if pred_masks and show_masks:
-            if im_gpu is None:
+            if img_gpu is None:
                 img = LetterBox(pred_masks.shape[1:])(image=annotator.result())
-                im_gpu = torch.as_tensor(img, dtype=torch.float16, device=pred_masks.data.device).permute(
+                img_gpu = torch.as_tensor(img, dtype=torch.float16, device=pred_masks.data.device).permute(
                     2, 0, 1).flip(0).contiguous() / 255
             idx = pred_boxes.cls if pred_boxes else range(len(pred_masks))
-            annotator.masks(pred_masks.data, colors=[colors(x, True) for x in idx], im_gpu=im_gpu)
+            annotator.masks(pred_masks.data, colors=[
+                            colors(x, True) for x in idx], im_gpu=img_gpu)
 
-        # Plot Detect results
         if pred_boxes and show_boxes:
             for d in reversed(pred_boxes):
-                c, conf, id = int(d.cls), float(d.conf) if conf else None, None if d.id is None else int(d.id.item())
+                c, conf, id = int(d.cls), float(
+                    d.conf) if conf else None, None if d.id is None else int(d.id.item())
                 name = ('' if id is None else f'id:{id} ') + names[c]
-                label = (f'{name} {conf:.2f}' if conf else name) if labels else None
-                annotator.box_label(d.xyxy.squeeze(), label, color=colors(c, True))
+                label = (
+                    f'{name} {conf:.2f}' if conf else name) if labels else None
+                annotator.box_label(d.xyxy.squeeze(), label,
+                                    color=colors(c, True))
 
-        # Plot Classify results
         if pred_probs is not None and show_probs:
-            text = ',\n'.join(f'{names[j] if names else j} {pred_probs.data[j]:.2f}' for j in pred_probs.top5)
-            x = round(self.orig_shape[0] * 0.03)
-            annotator.text([x, x], text, txt_color=(255, 255, 255))  # TODO: allow setting colors
+            text = f"{', '.join(f'{names[j] if names else j} {pred_probs.data[j]:.2f}' for j in pred_probs.top5)}, "
+            annotator.text((32, 32), text, txt_color=(
+                255, 255, 255))  # TODO: allow setting colors
 
-        # Plot Pose results
-        if self.keypoints is not None:
-            for k in reversed(self.keypoints.data):
+        if keypoints is not None:
+            for k in reversed(keypoints.data):
                 annotator.kpts(k, self.orig_shape, kpt_line=kpt_line)
 
         return annotator.result()
@@ -286,18 +297,21 @@ class Results(SimpleClass):
         texts = []
         if probs is not None:
             # Classify
-            [texts.append(f'{probs.data[j]:.2f} {self.names[j]}') for j in probs.top5]
+            [texts.append(f'{probs.data[j]:.2f} {self.names[j]}')
+             for j in probs.top5]
         elif boxes:
             # Detect/segment/pose
             for j, d in enumerate(boxes):
-                c, conf, id = int(d.cls), float(d.conf), None if d.id is None else int(d.id.item())
+                c, conf, id = int(d.cls), float(
+                    d.conf), None if d.id is None else int(d.id.item())
                 line = (c, *d.xywhn.view(-1))
                 if masks:
-                    seg = masks[j].xyn[0].copy().reshape(-1)  # reversed mask.xyn, (n,2) to (n*2)
+                    # reversed mask.xyn, (n,2) to (n*2)
+                    seg = masks[j].xyn[0].copy().reshape(-1)
                     line = (c, *seg)
                 if kpts is not None:
-                    kpt = torch.cat((kpts[j].xyn, kpts[j].conf[..., None]), 2) if kpts[j].has_visible else kpts[j].xyn
-                    line += (*kpt.reshape(-1).tolist(), )
+                    kpt = kpts[j].xyn.reshape(-1).tolist()
+                    line += (*kpt, )
                 line += (conf, ) * save_conf + (() if id is None else (id, ))
                 texts.append(('%g ' * len(line)).rstrip() % line)
 
@@ -314,7 +328,8 @@ class Results(SimpleClass):
             file_name (str | pathlib.Path): File name.
         """
         if self.probs is not None:
-            LOGGER.warning('WARNING ⚠️ Classify task do not support `save_crop`.')
+            LOGGER.warning(
+                'WARNING ⚠️ Classify task do not support `save_crop`.')
             return
         if isinstance(save_dir, str):
             save_dir = Path(save_dir)
@@ -323,17 +338,20 @@ class Results(SimpleClass):
         for d in self.boxes:
             save_one_box(d.xyxy,
                          self.orig_img.copy(),
-                         file=save_dir / self.names[int(d.cls)] / f'{file_name.stem}.jpg',
+                         file=save_dir /
+                         self.names[int(d.cls)] / f'{file_name.stem}.jpg',
                          BGR=True)
 
     def pandas(self):
         """Convert the object to a pandas DataFrame (not yet implemented)."""
-        LOGGER.warning("WARNING ⚠️ 'Results.pandas' method is not yet implemented.")
+        LOGGER.warning(
+            "WARNING ⚠️ 'Results.pandas' method is not yet implemented.")
 
     def tojson(self, normalize=False):
         """Convert the object to JSON format."""
         if self.probs is not None:
-            LOGGER.warning('Warning: Classify task do not support `tojson` yet.')
+            LOGGER.warning(
+                'Warning: Classify task do not support `tojson` yet.')
             return
 
         import json
@@ -343,17 +361,23 @@ class Results(SimpleClass):
         data = self.boxes.data.cpu().tolist()
         h, w = self.orig_shape if normalize else (1, 1)
         for i, row in enumerate(data):
-            box = {'x1': row[0] / w, 'y1': row[1] / h, 'x2': row[2] / w, 'y2': row[3] / h}
+            box = {'x1': row[0] / w, 'y1': row[1] /
+                   h, 'x2': row[2] / w, 'y2': row[3] / h}
             conf = row[4]
             id = int(row[5])
             name = self.names[id]
-            result = {'name': name, 'class': id, 'confidence': conf, 'box': box}
+            result = {'name': name, 'class': id,
+                      'confidence': conf, 'box': box}
             if self.masks:
-                x, y = self.masks.xy[i][:, 0], self.masks.xy[i][:, 1]  # numpy array
-                result['segments'] = {'x': (x / w).tolist(), 'y': (y / h).tolist()}
+                x, y = self.masks.xy[i][:,
+                                        0], self.masks.xy[i][:, 1]  # numpy array
+                result['segments'] = {
+                    'x': (x / w).tolist(), 'y': (y / h).tolist()}
             if self.keypoints is not None:
-                x, y, visible = self.keypoints[i].data[0].cpu().unbind(dim=1)  # torch Tensor
-                result['keypoints'] = {'x': (x / w).tolist(), 'y': (y / h).tolist(), 'visible': visible.tolist()}
+                x, y, visible = self.keypoints[i].data[0].cpu().unbind(
+                    dim=1)  # torch Tensor
+                result['keypoints'] = {
+                    'x': (x / w).tolist(), 'y': (y / h).tolist(), 'visible': visible.tolist()}
             results.append(result)
 
         # Convert detections to JSON
@@ -397,7 +421,8 @@ class Boxes(BaseTensor):
         if boxes.ndim == 1:
             boxes = boxes[None, :]
         n = boxes.shape[-1]
-        assert n in (6, 7), f'expected `n` in [6, 7], but got {n}'  # xyxy, (track_id), conf, cls
+        # xyxy, (track_id), conf, cls
+        assert n in (6, 7), f'expected `n` in [6, 7], but got {n}'
         super().__init__(boxes, orig_shape)
         self.is_track = n == 7
         self.orig_shape = orig_shape
@@ -432,7 +457,8 @@ class Boxes(BaseTensor):
     @lru_cache(maxsize=2)
     def xyxyn(self):
         """Return the boxes in xyxy format normalized by original image size."""
-        xyxy = self.xyxy.clone() if isinstance(self.xyxy, torch.Tensor) else np.copy(self.xyxy)
+        xyxy = self.xyxy.clone() if isinstance(
+            self.xyxy, torch.Tensor) else np.copy(self.xyxy)
         xyxy[..., [0, 2]] /= self.orig_shape[1]
         xyxy[..., [1, 3]] /= self.orig_shape[0]
         return xyxy
@@ -449,7 +475,8 @@ class Boxes(BaseTensor):
     @property
     def boxes(self):
         """Return the raw bboxes tensor (deprecated)."""
-        LOGGER.warning("WARNING ⚠️ 'Boxes.boxes' is deprecated. Use 'Boxes.data' instead.")
+        LOGGER.warning(
+            "WARNING ⚠️ 'Boxes.boxes' is deprecated. Use 'Boxes.data' instead.")
         return self.data
 
 
@@ -495,7 +522,8 @@ class Masks(BaseTensor):
     def xyn(self):
         """Return segments (normalized)."""
         return [
-            ops.scale_coords(self.data.shape[1:], x, self.orig_shape, normalize=True)
+            ops.scale_coords(
+                self.data.shape[1:], x, self.orig_shape, normalize=True)
             for x in ops.masks2segments(self.data)]
 
     @property
@@ -503,18 +531,21 @@ class Masks(BaseTensor):
     def xy(self):
         """Return segments (pixels)."""
         return [
-            ops.scale_coords(self.data.shape[1:], x, self.orig_shape, normalize=False)
+            ops.scale_coords(
+                self.data.shape[1:], x, self.orig_shape, normalize=False)
             for x in ops.masks2segments(self.data)]
 
     @property
     def masks(self):
         """Return the raw masks tensor (deprecated)."""
-        LOGGER.warning("WARNING ⚠️ 'Masks.masks' is deprecated. Use 'Masks.data' instead.")
+        LOGGER.warning(
+            "WARNING ⚠️ 'Masks.masks' is deprecated. Use 'Masks.data' instead.")
         return self.data
 
     def pandas(self):
         """Convert the object to a pandas DataFrame (not yet implemented)."""
-        LOGGER.warning("WARNING ⚠️ 'Masks.pandas' method is not yet implemented.")
+        LOGGER.warning(
+            "WARNING ⚠️ 'Masks.pandas' method is not yet implemented.")
 
 
 class Keypoints(BaseTensor):

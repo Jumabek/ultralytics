@@ -3,7 +3,6 @@
 import ast
 import contextlib
 import json
-import os
 import platform
 import zipfile
 from collections import OrderedDict, namedtuple
@@ -16,7 +15,7 @@ import torch
 import torch.nn as nn
 from PIL import Image
 
-from ultralytics.yolo.utils import ARM64, LINUX, LOGGER, ROOT, yaml_load
+from ultralytics.yolo.utils import LINUX, LOGGER, ROOT, yaml_load
 from ultralytics.yolo.utils.checks import check_requirements, check_suffix, check_version, check_yaml
 from ultralytics.yolo.utils.downloads import attempt_download_asset, is_url
 from ultralytics.yolo.utils.ops import xywh2xyxy
@@ -33,8 +32,10 @@ def check_class_names(names):
         if max(names.keys()) >= n:
             raise KeyError(f'{n}-class dataset requires class indices 0-{n - 1}, but you have invalid class indices '
                            f'{min(names.keys())}-{max(names.keys())} defined in your dataset YAML.')
-        if isinstance(names[0], str) and names[0].startswith('n0'):  # imagenet class codes, i.e. 'n01440764'
-            map = yaml_load(ROOT / 'datasets/ImageNet.yaml')['map']  # human-readable names
+        # imagenet class codes, i.e. 'n01440764'
+        if isinstance(names[0], str) and names[0].startswith('n0'):
+            # human-readable names
+            map = yaml_load(ROOT / 'datasets/ImageNet.yaml')['map']
             names = {k: map[v] for k, v in names.items()}
     return names
 
@@ -76,15 +77,15 @@ class AutoBackend(nn.Module):
             | TensorFlow Lite       | *.tflite         |
             | TensorFlow Edge TPU   | *_edgetpu.tflite |
             | PaddlePaddle          | *_paddle_model   |
-            | ncnn                  | *_ncnn_model     |
         """
         super().__init__()
         w = str(weights[0] if isinstance(weights, list) else weights)
         nn_module = isinstance(weights, torch.nn.Module)
-        pt, jit, onnx, xml, engine, coreml, saved_model, pb, tflite, edgetpu, tfjs, paddle, ncnn, triton = \
-            self._model_type(w)
+        pt, jit, onnx, xml, engine, coreml, saved_model, pb, tflite, edgetpu, tfjs, paddle, triton = self._model_type(
+            w)
         fp16 &= pt or jit or onnx or engine or nn_module or triton  # FP16
-        nhwc = coreml or saved_model or pb or tflite or edgetpu  # BHWC formats (vs torch BCWH)
+        # BHWC formats (vs torch BCWH)
+        nhwc = coreml or saved_model or pb or tflite or edgetpu
         stride = 32  # default stride
         model, metadata = None, None
         cuda = torch.cuda.is_available() and device.type != 'cpu'  # use CUDA
@@ -98,7 +99,8 @@ class AutoBackend(nn.Module):
             if hasattr(model, 'kpt_shape'):
                 kpt_shape = model.kpt_shape  # pose-only
             stride = max(int(model.stride.max()), 32)  # model stride
-            names = model.module.names if hasattr(model, 'module') else model.names  # get class names
+            names = model.module.names if hasattr(
+                model, 'module') else model.names  # get class names
             model.half() if fp16 else model.float()
             self.model = model  # explicitly assign for to(), cpu(), cuda(), half()
             pt = True
@@ -111,43 +113,52 @@ class AutoBackend(nn.Module):
             if hasattr(model, 'kpt_shape'):
                 kpt_shape = model.kpt_shape  # pose-only
             stride = max(int(model.stride.max()), 32)  # model stride
-            names = model.module.names if hasattr(model, 'module') else model.names  # get class names
+            names = model.module.names if hasattr(
+                model, 'module') else model.names  # get class names
             model.half() if fp16 else model.float()
             self.model = model  # explicitly assign for to(), cpu(), cuda(), half()
         elif jit:  # TorchScript
             LOGGER.info(f'Loading {w} for TorchScript inference...')
             extra_files = {'config.txt': ''}  # model metadata
-            model = torch.jit.load(w, _extra_files=extra_files, map_location=device)
+            model = torch.jit.load(
+                w, _extra_files=extra_files, map_location=device)
             model.half() if fp16 else model.float()
             if extra_files['config.txt']:  # load metadata dict
-                metadata = json.loads(extra_files['config.txt'], object_hook=lambda x: dict(x.items()))
+                metadata = json.loads(
+                    extra_files['config.txt'], object_hook=lambda x: dict(x.items()))
         elif dnn:  # ONNX OpenCV DNN
             LOGGER.info(f'Loading {w} for ONNX OpenCV DNN inference...')
             check_requirements('opencv-python>=4.5.4')
             net = cv2.dnn.readNetFromONNX(w)
         elif onnx:  # ONNX Runtime
             LOGGER.info(f'Loading {w} for ONNX Runtime inference...')
-            check_requirements(('onnx', 'onnxruntime-gpu' if cuda else 'onnxruntime'))
+            check_requirements(
+                ('onnx', 'onnxruntime-gpu' if cuda else 'onnxruntime'))
             import onnxruntime
-            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if cuda else ['CPUExecutionProvider']
+            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if cuda else [
+                'CPUExecutionProvider']
             session = onnxruntime.InferenceSession(w, providers=providers)
             output_names = [x.name for x in session.get_outputs()]
             metadata = session.get_modelmeta().custom_metadata_map  # metadata
         elif xml:  # OpenVINO
             LOGGER.info(f'Loading {w} for OpenVINO inference...')
-            check_requirements('openvino>=2023.0')  # requires openvino-dev: https://pypi.org/project/openvino-dev/
+            # requires openvino-dev: https://pypi.org/project/openvino-dev/
+            check_requirements('openvino')
             from openvino.runtime import Core, Layout, get_batch  # noqa
-            core = Core()
+            ie = Core()
             w = Path(w)
             if not w.is_file():  # if not *.xml
-                w = next(w.glob('*.xml'))  # get *.xml file from *_openvino_model dir
-            ov_model = core.read_model(model=str(w), weights=w.with_suffix('.bin'))
-            if ov_model.get_parameters()[0].get_layout().empty:
-                ov_model.get_parameters()[0].set_layout(Layout('NCHW'))
-            batch_dim = get_batch(ov_model)
+                # get *.xml file from *_openvino_model dir
+                w = next(w.glob('*.xml'))
+            network = ie.read_model(
+                model=str(w), weights=w.with_suffix('.bin'))
+            if network.get_parameters()[0].get_layout().empty:
+                network.get_parameters()[0].set_layout(Layout('NCHW'))
+            batch_dim = get_batch(network)
             if batch_dim.is_static:
                 batch_size = batch_dim.get_length()
-            ov_compiled_model = core.compile_model(ov_model, device_name='AUTO')  # AUTO selects best available device
+            executable_network = ie.compile_model(
+                network, device_name='CPU')  # device_name="MYRIAD" for NCS2
             metadata = w.parent / 'metadata.yaml'
         elif engine:  # TensorRT
             LOGGER.info(f'Loading {w} for TensorRT inference...')
@@ -155,18 +166,24 @@ class AutoBackend(nn.Module):
                 import tensorrt as trt  # noqa https://developer.nvidia.com/nvidia-tensorrt-download
             except ImportError:
                 if LINUX:
-                    check_requirements('nvidia-tensorrt', cmds='-U --index-url https://pypi.ngc.nvidia.com')
+                    check_requirements(
+                        'nvidia-tensorrt', cmds='-U --index-url https://pypi.ngc.nvidia.com')
                 import tensorrt as trt  # noqa
-            check_version(trt.__version__, '7.0.0', hard=True)  # require tensorrt>=7.0.0
+            # require tensorrt>=7.0.0
+            check_version(trt.__version__, '7.0.0', hard=True)
             if device.type == 'cpu':
                 device = torch.device('cuda:0')
-            Binding = namedtuple('Binding', ('name', 'dtype', 'shape', 'data', 'ptr'))
+            Binding = namedtuple(
+                'Binding', ('name', 'dtype', 'shape', 'data', 'ptr'))
             logger = trt.Logger(trt.Logger.INFO)
             # Read file
             with open(w, 'rb') as f, trt.Runtime(logger) as runtime:
-                meta_len = int.from_bytes(f.read(4), byteorder='little')  # read metadata length
-                metadata = json.loads(f.read(meta_len).decode('utf-8'))  # read metadata
-                model = runtime.deserialize_cuda_engine(f.read())  # read engine
+                meta_len = int.from_bytes(
+                    f.read(4), byteorder='little')  # read metadata length
+                metadata = json.loads(
+                    f.read(meta_len).decode('utf-8'))  # read metadata
+                model = runtime.deserialize_cuda_engine(
+                    f.read())  # read engine
             context = model.create_execution_context()
             bindings = OrderedDict()
             output_names = []
@@ -178,16 +195,20 @@ class AutoBackend(nn.Module):
                 if model.binding_is_input(i):
                     if -1 in tuple(model.get_binding_shape(i)):  # dynamic
                         dynamic = True
-                        context.set_binding_shape(i, tuple(model.get_profile_shape(0, i)[2]))
+                        context.set_binding_shape(
+                            i, tuple(model.get_profile_shape(0, i)[2]))
                     if dtype == np.float16:
                         fp16 = True
                 else:  # output
                     output_names.append(name)
                 shape = tuple(context.get_binding_shape(i))
                 im = torch.from_numpy(np.empty(shape, dtype=dtype)).to(device)
-                bindings[name] = Binding(name, dtype, shape, im, int(im.data_ptr()))
-            binding_addrs = OrderedDict((n, d.ptr) for n, d in bindings.items())
-            batch_size = bindings['images'].shape[0]  # if dynamic, this is instead max batch size
+                bindings[name] = Binding(
+                    name, dtype, shape, im, int(im.data_ptr()))
+            binding_addrs = OrderedDict((n, d.ptr)
+                                        for n, d in bindings.items())
+            # if dynamic, this is instead max batch size
+            batch_size = bindings['images'].shape[0]
         elif coreml:  # CoreML
             LOGGER.info(f'Loading {w} for CoreML inference...')
             import coremltools as ct
@@ -197,7 +218,8 @@ class AutoBackend(nn.Module):
             LOGGER.info(f'Loading {w} for TensorFlow SavedModel inference...')
             import tensorflow as tf
             keras = False  # assume TF1 saved_model
-            model = tf.keras.models.load_model(w) if keras else tf.saved_model.load(w)
+            model = tf.keras.models.load_model(
+                w) if keras else tf.saved_model.load(w)
             metadata = Path(w) / 'metadata.yaml'
         elif pb:  # GraphDef https://www.tensorflow.org/guide/migrate#a_graphpb_or_graphpbtxt
             LOGGER.info(f'Loading {w} for TensorFlow GraphDef inference...')
@@ -207,14 +229,16 @@ class AutoBackend(nn.Module):
 
             def wrap_frozen_graph(gd, inputs, outputs):
                 """Wrap frozen graphs for deployment."""
-                x = tf.compat.v1.wrap_function(lambda: tf.compat.v1.import_graph_def(gd, name=''), [])  # wrapped
+                x = tf.compat.v1.wrap_function(
+                    lambda: tf.compat.v1.import_graph_def(gd, name=''), [])  # wrapped
                 ge = x.graph.as_graph_element
                 return x.prune(tf.nest.map_structure(ge, inputs), tf.nest.map_structure(ge, outputs))
 
             gd = tf.Graph().as_graph_def()  # TF GraphDef
             with open(w, 'rb') as f:
                 gd.ParseFromString(f.read())
-            frozen_func = wrap_frozen_graph(gd, inputs='x:0', outputs=gd_outputs(gd))
+            frozen_func = wrap_frozen_graph(
+                gd, inputs='x:0', outputs=gd_outputs(gd))
         elif tflite or edgetpu:  # https://www.tensorflow.org/lite/guide/python#install_tensorflow_lite_for_python
             try:  # https://coral.ai/docs/edgetpu/tflite-python/#update-existing-tf-lite-code-for-the-edge-tpu
                 from tflite_runtime.interpreter import Interpreter, load_delegate
@@ -222,12 +246,14 @@ class AutoBackend(nn.Module):
                 import tensorflow as tf
                 Interpreter, load_delegate = tf.lite.Interpreter, tf.lite.experimental.load_delegate
             if edgetpu:  # TF Edge TPU https://coral.ai/software/#edgetpu-runtime
-                LOGGER.info(f'Loading {w} for TensorFlow Lite Edge TPU inference...')
+                LOGGER.info(
+                    f'Loading {w} for TensorFlow Lite Edge TPU inference...')
                 delegate = {
                     'Linux': 'libedgetpu.so.1',
                     'Darwin': 'libedgetpu.1.dylib',
                     'Windows': 'edgetpu.dll'}[platform.system()]
-                interpreter = Interpreter(model_path=w, experimental_delegates=[load_delegate(delegate)])
+                interpreter = Interpreter(model_path=w, experimental_delegates=[
+                                          load_delegate(delegate)])
             else:  # TFLite
                 LOGGER.info(f'Loading {w} for TensorFlow Lite inference...')
                 interpreter = Interpreter(model_path=w)  # load TFLite model
@@ -238,36 +264,28 @@ class AutoBackend(nn.Module):
             with contextlib.suppress(zipfile.BadZipFile):
                 with zipfile.ZipFile(w, 'r') as model:
                     meta_file = model.namelist()[0]
-                    metadata = ast.literal_eval(model.read(meta_file).decode('utf-8'))
+                    metadata = ast.literal_eval(
+                        model.read(meta_file).decode('utf-8'))
         elif tfjs:  # TF.js
-            raise NotImplementedError('YOLOv8 TF.js inference is not currently supported.')
+            raise NotImplementedError(
+                'YOLOv8 TF.js inference is not supported')
         elif paddle:  # PaddlePaddle
             LOGGER.info(f'Loading {w} for PaddlePaddle inference...')
             check_requirements('paddlepaddle-gpu' if cuda else 'paddlepaddle')
             import paddle.inference as pdi  # noqa
             w = Path(w)
             if not w.is_file():  # if not *.pdmodel
-                w = next(w.rglob('*.pdmodel'))  # get *.pdmodel file from *_paddle_model dir
+                # get *.pdmodel file from *_paddle_model dir
+                w = next(w.rglob('*.pdmodel'))
             config = pdi.Config(str(w), str(w.with_suffix('.pdiparams')))
             if cuda:
-                config.enable_use_gpu(memory_pool_init_size_mb=2048, device_id=0)
+                config.enable_use_gpu(
+                    memory_pool_init_size_mb=2048, device_id=0)
             predictor = pdi.create_predictor(config)
-            input_handle = predictor.get_input_handle(predictor.get_input_names()[0])
+            input_handle = predictor.get_input_handle(
+                predictor.get_input_names()[0])
             output_names = predictor.get_output_names()
             metadata = w.parents[1] / 'metadata.yaml'
-        elif ncnn:  # ncnn
-            LOGGER.info(f'Loading {w} for ncnn inference...')
-            check_requirements('git+https://github.com/Tencent/ncnn.git' if ARM64 else 'ncnn')  # requires NCNN
-            import ncnn as pyncnn
-            net = pyncnn.Net()
-            net.opt.num_threads = os.cpu_count()
-            net.opt.use_vulkan_compute = cuda
-            w = Path(w)
-            if not w.is_file():  # if not *.param
-                w = next(w.glob('*.param'))  # get *.param file from *_ncnn_model dir
-            net.load_param(str(w))
-            net.load_model(str(w.with_suffix('.bin')))
-            metadata = w.parent / 'metadata.yaml'
         elif triton:  # NVIDIA Triton Inference Server
             LOGGER.info('Triton Inference Server not supported...')
             '''
@@ -299,7 +317,8 @@ class AutoBackend(nn.Module):
             names = metadata['names']
             kpt_shape = metadata.get('kpt_shape')
         elif not (pt or triton or nn_module):
-            LOGGER.warning(f"WARNING ⚠️ Metadata not found for 'model={weights}'")
+            LOGGER.warning(
+                f"WARNING ⚠️ Metadata not found for 'model={weights}'")
 
         # Check names
         if 'names' not in locals():  # names missing
@@ -324,10 +343,12 @@ class AutoBackend(nn.Module):
         if self.fp16 and im.dtype != torch.float16:
             im = im.half()  # to FP16
         if self.nhwc:
-            im = im.permute(0, 2, 3, 1)  # torch BCHW to numpy BHWC shape(1,320,192,3)
+            # torch BCHW to numpy BHWC shape(1,320,192,3)
+            im = im.permute(0, 2, 3, 1)
 
         if self.pt or self.nn_module:  # PyTorch
-            y = self.model(im, augment=augment, visualize=visualize) if augment or visualize else self.model(im)
+            y = self.model(
+                im, augment=augment, visualize=visualize) if augment or visualize else self.model(im)
         elif self.jit:  # TorchScript
             y = self.model(im)
         elif self.dnn:  # ONNX OpenCV DNN
@@ -336,18 +357,22 @@ class AutoBackend(nn.Module):
             y = self.net.forward()
         elif self.onnx:  # ONNX Runtime
             im = im.cpu().numpy()  # torch to numpy
-            y = self.session.run(self.output_names, {self.session.get_inputs()[0].name: im})
+            y = self.session.run(self.output_names, {
+                                 self.session.get_inputs()[0].name: im})
         elif self.xml:  # OpenVINO
             im = im.cpu().numpy()  # FP32
-            y = list(self.ov_compiled_model(im).values())
+            y = list(self.executable_network([im]).values())
         elif self.engine:  # TensorRT
             if self.dynamic and im.shape != self.bindings['images'].shape:
                 i = self.model.get_binding_index('images')
-                self.context.set_binding_shape(i, im.shape)  # reshape if dynamic
-                self.bindings['images'] = self.bindings['images']._replace(shape=im.shape)
+                self.context.set_binding_shape(
+                    i, im.shape)  # reshape if dynamic
+                self.bindings['images'] = self.bindings['images']._replace(
+                    shape=im.shape)
                 for name in self.output_names:
                     i = self.model.get_binding_index(name)
-                    self.bindings[name].data.resize_(tuple(self.context.get_binding_shape(i)))
+                    self.bindings[name].data.resize_(
+                        tuple(self.context.get_binding_shape(i)))
             s = self.bindings['images'].shape
             assert im.shape == s, f"input size {im.shape} {'>' if self.dynamic else 'not equal to'} max model size {s}"
             self.binding_addrs['images'] = int(im.data_ptr())
@@ -357,47 +382,47 @@ class AutoBackend(nn.Module):
             im = im[0].cpu().numpy()
             im_pil = Image.fromarray((im * 255).astype('uint8'))
             # im = im.resize((192, 320), Image.BILINEAR)
-            y = self.model.predict({'image': im_pil})  # coordinates are xywh normalized
+            # coordinates are xywh normalized
+            y = self.model.predict({'image': im_pil})
             if 'confidence' in y:
-                box = xywh2xyxy(y['coordinates'] * [[w, h, w, h]])  # xyxy pixels
-                conf, cls = y['confidence'].max(1), y['confidence'].argmax(1).astype(np.float)
-                y = np.concatenate((box, conf.reshape(-1, 1), cls.reshape(-1, 1)), 1)
+                box = xywh2xyxy(y['coordinates'] *
+                                [[w, h, w, h]])  # xyxy pixels
+                conf, cls = y['confidence'].max(
+                    1), y['confidence'].argmax(1).astype(np.float)
+                y = np.concatenate(
+                    (box, conf.reshape(-1, 1), cls.reshape(-1, 1)), 1)
             elif len(y) == 1:  # classification model
                 y = list(y.values())
             elif len(y) == 2:  # segmentation model
-                y = list(reversed(y.values()))  # reversed for segmentation models (pred, proto)
+                # reversed for segmentation models (pred, proto)
+                y = list(reversed(y.values()))
         elif self.paddle:  # PaddlePaddle
             im = im.cpu().numpy().astype(np.float32)
             self.input_handle.copy_from_cpu(im)
             self.predictor.run()
-            y = [self.predictor.get_output_handle(x).copy_to_cpu() for x in self.output_names]
-        elif self.ncnn:  # ncnn
-            mat_in = self.pyncnn.Mat(im[0].cpu().numpy())
-            ex = self.net.create_extractor()
-            input_names, output_names = self.net.input_names(), self.net.output_names()
-            ex.input(input_names[0], mat_in)
-            y = []
-            for output_name in output_names:
-                mat_out = self.pyncnn.Mat()
-                ex.extract(output_name, mat_out)
-                y.append(np.array(mat_out)[None])
+            y = [self.predictor.get_output_handle(
+                x).copy_to_cpu() for x in self.output_names]
         elif self.triton:  # NVIDIA Triton Inference Server
             y = self.model(im)
         else:  # TensorFlow (SavedModel, GraphDef, Lite, Edge TPU)
             im = im.cpu().numpy()
             if self.saved_model:  # SavedModel
-                y = self.model(im, training=False) if self.keras else self.model(im)
+                y = self.model(
+                    im, training=False) if self.keras else self.model(im)
                 if not isinstance(y, list):
                     y = [y]
             elif self.pb:  # GraphDef
                 y = self.frozen_func(x=self.tf.constant(im))
                 if len(y) == 2 and len(self.names) == 999:  # segments and names not defined
-                    ip, ib = (0, 1) if len(y[0].shape) == 4 else (1, 0)  # index of protos, boxes
-                    nc = y[ib].shape[1] - y[ip].shape[3] - 4  # y = (1, 160, 160, 32), (1, 116, 8400)
+                    ip, ib = (0, 1) if len(y[0].shape) == 4 else (
+                        1, 0)  # index of protos, boxes
+                    # y = (1, 160, 160, 32), (1, 116, 8400)
+                    nc = y[ib].shape[1] - y[ip].shape[3] - 4
                     self.names = {i: f'class{i}' for i in range(nc)}
             else:  # Lite or Edge TPU
                 input = self.input_details[0]
-                int8 = input['dtype'] == np.int8  # is TFLite quantized int8 model
+                # is TFLite quantized int8 model
+                int8 = input['dtype'] == np.int8
                 if int8:
                     scale, zero_point = input['quantization']
                     im = (im / scale + zero_point).astype(np.int8)  # de-scale
@@ -408,13 +433,16 @@ class AutoBackend(nn.Module):
                     x = self.interpreter.get_tensor(output['index'])
                     if int8:
                         scale, zero_point = output['quantization']
-                        x = (x.astype(np.float32) - zero_point) * scale  # re-scale
+                        x = (x.astype(np.float32) - zero_point) * \
+                            scale  # re-scale
                     y.append(x)
             # TF segment fixes: export is reversed vs ONNX export and protos are transposed
             if len(y) == 2:  # segment with (det, proto) output order reversed
                 if len(y[1].shape) != 4:
-                    y = list(reversed(y))  # should be y = (1, 116, 8400), (1, 160, 160, 32)
-                y[1] = np.transpose(y[1], (0, 3, 1, 2))  # should be y = (1, 116, 8400), (1, 32, 160, 160)
+                    # should be y = (1, 116, 8400), (1, 160, 160, 32)
+                    y = list(reversed(y))
+                # should be y = (1, 116, 8400), (1, 32, 160, 160)
+                y[1] = np.transpose(y[1], (0, 3, 1, 2))
             y = [x if isinstance(x, np.ndarray) else x.numpy() for x in y]
             # y[0][..., :4] *= [w, h, w, h]  # xywh normalized to pixels
 
@@ -449,7 +477,8 @@ class AutoBackend(nn.Module):
         """
         warmup_types = self.pt, self.jit, self.onnx, self.engine, self.saved_model, self.pb, self.triton, self.nn_module
         if any(warmup_types) and (self.device.type != 'cpu' or self.triton):
-            im = torch.empty(*imgsz, dtype=torch.half if self.fp16 else torch.float, device=self.device)  # input
+            im = torch.empty(
+                *imgsz, dtype=torch.half if self.fp16 else torch.float, device=self.device)  # input
             for _ in range(2 if self.jit else 1):  #
                 self.forward(im)  # warmup
 
@@ -458,7 +487,8 @@ class AutoBackend(nn.Module):
         """Applies default class names to an input YAML file or returns numerical class names."""
         with contextlib.suppress(Exception):
             return yaml_load(check_yaml(data))['names']
-        return {i: f'class{i}' for i in range(999)}  # return default if above errors
+        # return default if above errors
+        return {i: f'class{i}' for i in range(999)}
 
     @staticmethod
     def _model_type(p='path/to/model.pt'):
@@ -477,5 +507,6 @@ class AutoBackend(nn.Module):
         url = urlparse(p)  # if url may be Triton inference server
         types = [s in Path(p).name for s in sf]
         types[8] &= not types[9]  # tflite &= not edgetpu
-        triton = not any(types) and all([any(s in url.scheme for s in ['http', 'grpc']), url.netloc])
+        triton = not any(types) and all(
+            [any(s in url.scheme for s in ['http', 'grpc']), url.netloc])
         return types + [triton]
