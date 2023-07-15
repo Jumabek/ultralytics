@@ -213,7 +213,6 @@ def check_requirements(requirements=ROOT.parent / 'requirements.txt', exclude=()
     prefix = colorstr('red', 'bold', 'requirements:')
     check_python()  # check python version
     check_torchvision()  # check torch-torchvision compatibility
-    file = None
     if isinstance(requirements, Path):  # requirements.txt file
         file = requirements.resolve()
         assert file.exists(), f'{prefix} {file} not found, check failed.'
@@ -223,22 +222,22 @@ def check_requirements(requirements=ROOT.parent / 'requirements.txt', exclude=()
         requirements = [requirements]
 
     s = ''  # console string
-    n = 0  # number of packages updates
+    pkgs = []
     for r in requirements:
-        rmin = r.split('/')[-1].replace('.git', '')  # replace git+https://org/repo.git -> 'repo'
+        r_stripped = r.split('/')[-1].replace('.git', '')  # replace git+https://org/repo.git -> 'repo'
         try:
-            pkg.require(rmin)
+            pkg.require(r_stripped)
         except (pkg.VersionConflict, pkg.DistributionNotFound):  # exception if requirements not met
             try:  # attempt to import (slower but more accurate)
                 import importlib
-                importlib.import_module(next(pkg.parse_requirements(rmin)).name)
+                importlib.import_module(next(pkg.parse_requirements(r_stripped)).name)
             except ImportError:
                 s += f'"{r}" '
-                n += 1
+                pkgs.append(r)
 
     if s:
         if install and AUTOINSTALL:  # check environment variable
-            pkgs = file or requirements  # missing packages
+            n = len(pkgs)  # number of packages updates
             LOGGER.info(f"{prefix} Ultralytics requirement{'s' * (n > 1)} {pkgs} not found, attempting AutoUpdate...")
             try:
                 t = time.time()
