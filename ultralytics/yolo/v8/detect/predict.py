@@ -14,7 +14,7 @@ class DetectionPredictor(BasePredictor):
     def postprocess(self, preds, img, orig_imgs):
         """Postprocesses predictions and returns a list of Results objects."""
         feature_map = preds[-1][0, 0, :, :]  # (160, 320)
-
+        # log self.args.conf
         preds = ops.non_max_suppression(preds,
                                         self.args.conf,
                                         self.args.iou,
