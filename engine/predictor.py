@@ -228,7 +228,8 @@ class BasePredictor:
 
             # Check if save_dir/ label file exists
             if self.args.save or self.args.save_txt:
-                (self.save_dir / "labels" if self.args.save_txt else self.save_dir).mkdir(parents=True, exist_ok=True)
+                pass
+                # (self.save_dir / "labels" if self.args.save_txt else self.save_dir).mkdir(parents=True, exist_ok=True)
 
             # Warmup model
             if not self.done_warmup:
@@ -297,7 +298,7 @@ class BasePredictor:
         if self.args.save or self.args.save_txt or self.args.save_crop:
             nl = len(list(self.save_dir.glob("labels/*.txt")))  # number of labels
             s = f"\n{nl} label{'s' * (nl > 1)} saved to {self.save_dir / 'labels'}" if self.args.save_txt else ""
-            LOGGER.info(f"Results saved to {colorstr('bold', self.save_dir)}{s}")
+            LOGGER.info(f"Results saved to {colorstr('bold', self.save_dir)}")
         self.run_callbacks("on_predict_end")
 
     def setup_model(self, model, verbose=True):
