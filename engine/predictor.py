@@ -332,7 +332,7 @@ class BasePredictor:
         self.data_path = p
 
         # self.txt_path = self.save_dir / "labels" / (p.stem + ("" if self.dataset.mode == "image" else f"_{frame}"))
-        self.txt_path = str(self.save_dir)
+        self.txt_path = str(self.save_dir) + '/data'
         string += '%gx%g ' % im.shape[2:]
 
         result = self.results[i]
