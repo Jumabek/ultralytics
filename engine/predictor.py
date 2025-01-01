@@ -32,6 +32,7 @@ Usage - formats:
 import platform
 import re
 import threading
+import os
 from pathlib import Path
 
 import cv2
@@ -332,7 +333,12 @@ class BasePredictor:
         self.data_path = p
 
         # self.txt_path = self.save_dir / "labels" / (p.stem + ("" if self.dataset.mode == "image" else f"_{frame}"))
-        self.txt_path = str(self.save_dir) + '/data'
+        parts = str(self.save_dir).rsplit('/', 1)
+        data_dir = f"{parts[0]}/data"
+        os.makedirs(data_dir, exist_ok=True)
+        modified_path = f"{parts[0]}/data/{parts[1]}"
+        self.txt_path = modified_path
+
         string += '%gx%g ' % im.shape[2:]
 
         result = self.results[i]
